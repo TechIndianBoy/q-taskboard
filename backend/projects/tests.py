@@ -97,3 +97,15 @@ class TestTasks:
 
         response = client.delete(f'/api/tasks/{task.id}')
         assert response.status_code == 403
+
+@pytest.mark.django_db
+class TestComments:
+    def setup_task(self, user):
+        project =  Project.objects.create(name='Comment project', owner=user)
+        Membership.objects.create(user=user, project=project, role='admin')
+        task = Task.objects.create(
+            project=project,
+            title='Comment Task',
+            created_by = user,
+        )
+        return project, task

@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
 from users.serializers import UserSerializer
-from .models import Project, Membership, Task
-from .serializers import ProjectDetailSerializer, TaskSerializer
+from .models import Project, Membership, Task, Comment
+from .serializers import ProjectDetailSerializer, TaskSerializer, CommentSerializer
 
 
 def _get_membership(user, project_id):
@@ -164,7 +164,7 @@ class TaskListCreateView(APIView):
 class TaskDetailView(APIView):
     def patch(self, request, task_id):
         try:
-            task = Task.objects.get(id=task_id)
+            task = Task.objects.select_related('project').get(id=task_id)
         except Task.DoesNotExist:
             return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -198,6 +198,46 @@ class TaskDetailView(APIView):
 
         task.delete()
         return Response({'ok': True})
+
+class TaskCommentView(APIView):
+    def get(self, request, task_id):
+        try:
+            task = Task.objects.select_related('project').get(id=task_id)
+        except Task.DoesNotExist:
+            return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        membership = _get_membership(request.user, str(task.project_id))
+        if not membership:
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        comments = (Comment.objects.filter(task=task).select_related('author').order_by('created_at'))
+
+        return Response({'comments': CommentSerializer(comments, many = True).data})
+
+    def post(self, request, task_id):
+        try:
+            task = Task.objects.select_related('project').get(id=task_id)
+        except Task.DoesNotExist:
+            return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        membership = _get_membership(request.user, str(task.project_id))
+        if not membership:
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not _can_edit_tasks(membership.role):
+            return Response({'error': 'viewer cannot add comments'}, status=status.HTTP_403_FORBIDDEN)
+
+        body = (request.data.get('body') or '').strip()
+        if not body :
+            return Response({'error:' 'body is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        comment = Comment.objects.create(
+            task=task,
+            author=request.user,
+            body=body
+        )
+        
+        return Response({'comment' : CommentSerializer(comment).data}, status=status.HTTP_201_CREATED)
 
 
 class MemberAddView(APIView):
