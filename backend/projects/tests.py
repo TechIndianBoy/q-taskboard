@@ -101,11 +101,138 @@ class TestTasks:
 @pytest.mark.django_db
 class TestComments:
     def setup_task(self, user):
-        project =  Project.objects.create(name='Comment project', owner=user)
+        project = Project.objects.create(name='Comment Project', owner=user)
         Membership.objects.create(user=user, project=project, role='admin')
         task = Task.objects.create(
             project=project,
             title='Comment Task',
-            created_by = user,
+            created_by=user,
         )
         return project, task
+
+    def login(self, client, email, password='password123'):
+        response = client.post(
+            '/api/auth/login',
+            {'email': email, 'password': password},
+            format='json',
+        )
+        assert response.status_code == 200
+        client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {response.data['token']}"
+        )
+
+    def test_member_can_add_and_read_comment(self, client, user):
+        project, task = self.setup_task(user)
+
+        self.login(client, user.email)
+
+        response = client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'First comment'},
+            format='json',
+        )
+
+        assert response.status_code == 201
+        assert response.data['comment']['body'] == 'First comment'
+        assert response.data['comment']['author']['email'] == user.email
+
+        response = client.get(f'/api/tasks/{task.id}/comments')
+
+        assert response.status_code == 200
+        assert len(response.data['comments']) == 1
+        assert response.data['comments'][0]['body'] == 'First comment'
+
+    def test_viewer_can_read_but_cannot_add_comment(self, client, user):
+        project, task = self.setup_task(user)
+
+        viewer = User.objects.create_user(
+            email='viewer@example.com',
+            name='Viewer',
+            password='password123',
+        )
+        Membership.objects.create(
+            user=viewer,
+            project=project,
+            role='viewer',
+        )
+
+        self.login(client, viewer.email)
+
+        response = client.get(f'/api/tasks/{task.id}/comments')
+        assert response.status_code == 200
+
+        response = client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'Viewer comment'},
+            format='json',
+        )
+        assert response.status_code == 403
+
+    def test_non_member_cannot_access_comments(self, client, user):
+        project, task = self.setup_task(user)
+
+        other = User.objects.create_user(
+            email='other@example.com',
+            name='Other',
+            password='password123',
+        )
+
+        self.login(client, other.email)
+
+        response = client.get(f'/api/tasks/{task.id}/comments')
+        assert response.status_code == 403
+
+        response = client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'Unauthorized comment'},
+            format='json',
+        )
+        assert response.status_code == 403
+
+    def test_comments_are_chronological(self, client, user):
+        project, task = self.setup_task(user)
+
+        self.login(client, user.email)
+
+        client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'First'},
+            format='json',
+        )
+        client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'Second'},
+            format='json',
+        )
+
+        response = client.get(f'/api/tasks/{task.id}/comments')
+
+        assert response.status_code == 200
+        comments = response.data['comments']
+
+        assert [c['body'] for c in comments] == ['First', 'Second']
+
+    def test_comments_are_append_only(self, client, user):
+        project, task = self.setup_task(user)
+
+        self.login(client, user.email)
+
+        response = client.post(
+            f'/api/tasks/{task.id}/comments',
+            {'body': 'Original'},
+            format='json',
+        )
+
+        comment_id = response.data['comment']['id']
+
+        response = client.patch(
+            f'/api/tasks/{task.id}/comments/{comment_id}',
+            {'body': 'Changed'},
+            format='json',
+        )
+        assert response.status_code == 404
+
+        response = client.delete(
+            f'/api/tasks/{task.id}/comments/{comment_id}'
+        )
+        assert response.status_code == 404

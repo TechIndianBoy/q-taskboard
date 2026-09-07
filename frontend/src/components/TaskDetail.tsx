@@ -1,24 +1,44 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 import type { ApiTask, ApiProjectMember, TaskStatus } from "@/types";
 import { STATUS_LABELS, STATUS_ORDER } from "@/types";
+
+type ApiComment = {
+  id: string;
+  author: {
+    id: string;
+    email: string;
+    name: string;
+  };
+  body: string;
+  created_at: string;
+};
 
 type Props = {
   task: ApiTask;
   projectId: string;
   members: ApiProjectMember[];
+  userRole?: "admin" | "member" | "viewer";
   onClose: () => void;
 };
 
-export function TaskDetail({ task, projectId, members, onClose }: Props) {
+export function TaskDetail({ task, projectId, members, userRole, onClose,}: Props) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
   const [status, setStatus] = useState<TaskStatus>(task.status);
   const [assigneeId, setAssigneeId] = useState<string>(task.assigneeId ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [commentBody, setCommentBody] = useState("");
 
+  const commentsQuery = useQuery({
+    queryKey: ["task-comments", task.id],
+    queryFn: () =>
+      apiFetch<{ comments: ApiComment[] }>(
+        `/api/tasks/${task.id}/comments`
+      ),
+  });
   const updateTask = useMutation({
     mutationFn: (input: Partial<ApiTask>) =>
       apiFetch<{ task: ApiTask }>(`/api/tasks/${task.id}`, {
@@ -126,7 +146,73 @@ export function TaskDetail({ task, projectId, members, onClose }: Props) {
             {error}
           </p>
         )}
+        <div className="mt-6 border-t border-border pt-5">
+          <h3 className="text-sm font-semibold mb-3">comments</h3>
 
+          {commentsQuery.isLoading && (
+            <p className="text-sm text-muted">loading comments…</p>
+          )}
+
+          {commentsQuery.data?.comments.length === 0 && (
+            <p className="text-sm text-muted">no comments yet.</p>
+          )}
+
+          <div className="space-y-3 max-h-48 overflow-y-auto">
+            {commentsQuery.data?.comments.map((comment) => (
+              <div
+                key={comment.id}
+                className="rounded-md border border-border bg-bg p-3"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium">
+                    {comment.author.name}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {new Date(comment.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-sm whitespace-pre-wrap">{comment.body}</p>
+              </div>
+            ))}
+          </div>
+          {userRole !== "viewer" && (
+            <div className="mt-3">
+              <textarea
+                value={commentBody}
+                onChange={(e) => setCommentBody(e.target.value)}
+                placeholder="Add a comment…"
+                rows={3}
+                className="block w-full rounded-md bg-bg border border-border px-3 py-2 text-sm focus:border-accent focus:outline-none"
+              />
+
+              <button
+                onClick={async () => {
+                  const body = commentBody.trim();
+                  if (!body) return;
+
+                  try {
+                    await apiFetch(`/api/tasks/${task.id}/comments`, {
+                      method: "POST",
+                      body: JSON.stringify({ body }),
+                    });
+
+                    setCommentBody("");
+                    await commentsQuery.refetch();
+                  } catch (err) {
+                    setError(
+                      err instanceof Error ? err.message : "failed to add comment"
+                    );
+                  }
+                }}
+                disabled={!commentBody.trim()}
+                className="mt-2 text-sm px-4 py-2 rounded-md bg-accent text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                add comment
+              </button>
+            </div>
+          )}
+          
+        </div>
         <div className="flex items-center justify-between gap-3">
           <button
             onClick={() => deleteTask.mutate()}
